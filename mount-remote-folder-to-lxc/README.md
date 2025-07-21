@@ -4,9 +4,9 @@
 
 ## Запуск
 
-### Вариант 1: Прямой запуск из репозитория (рекомендуемый)
+### Вариант 1: Прямой запуск из репозитория
 
-Запустите скрипт одной командой прямо из GitHub:
+⚠️ **Внимание**: Прямой запуск через pipe может не работать в некоторых средах. Если вы видите ошибку "ID контейнера не может быть пустым", используйте Вариант 2.
 
 ```bash
 curl -s https://raw.githubusercontent.com/boochamoocha/proxmox-scripts/main/mount-remote-folder-to-lxc/mount-remote-folder-to-lxc.sh | bash
@@ -17,7 +17,7 @@ curl -s https://raw.githubusercontent.com/boochamoocha/proxmox-scripts/main/moun
 wget -qO- https://raw.githubusercontent.com/boochamoocha/proxmox-scripts/main/mount-remote-folder-to-lxc/mount-remote-folder-to-lxc.sh | bash
 ```
 
-### Вариант 2: Скачивание и запуск локально
+### Вариант 2: Скачивание и запуск локально (рекомендуемый)
 
 1. Скачайте скрипт на ваш сервер Proxmox:
 ```bash
@@ -27,8 +27,10 @@ wget https://raw.githubusercontent.com/boochamoocha/proxmox-scripts/main/mount-r
 2. Сделайте скрипт исполняемым и запустите:
 ```bash
 chmod +x mount-remote-folder-to-lxc.sh
-sudo ./mount-remote-folder-to-lxc.sh
+./mount-remote-folder-to-lxc.sh
 ```
+
+⚠️ **Важно**: Запускайте скрипт **от пользователя root** или с использованием `sudo ./mount-remote-folder-to-lxc.sh`
 
 ## Возможности
 

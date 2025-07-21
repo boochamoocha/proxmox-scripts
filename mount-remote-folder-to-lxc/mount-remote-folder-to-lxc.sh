@@ -2,6 +2,29 @@
 
 set -euo pipefail
 
+# Проверка интерактивного режима
+if [[ ! -t 0 ]] && [[ ! -c /dev/tty ]]; then
+    echo "❌ Ошибка: Скрипт требует интерактивного ввода"
+    echo ""
+    echo "🔧 Решение:"
+    echo "1. Скачайте скрипт локально:"
+    echo "   wget https://raw.githubusercontent.com/boochamoocha/proxmox-scripts/main/mount-remote-folder-to-lxc/mount-remote-folder-to-lxc.sh"
+    echo ""
+    echo "2. Сделайте исполняемым и запустите:"
+    echo "   chmod +x mount-remote-folder-to-lxc.sh"
+    echo "   ./mount-remote-folder-to-lxc.sh"
+    exit 1
+fi
+
+# Функция безопасного чтения с TTY
+safe_read() {
+    if [[ -t 0 ]]; then
+        read "$@"
+    else
+        read "$@" < /dev/tty
+    fi
+}
+
 # Функция валидации пустых значений
 validate_input() {
     local input="$1"
@@ -25,7 +48,7 @@ echo "=== 🧩 Конфигурация монтирования в Proxmox LXC 
 
 # Ввод ID контейнера с валидацией
 while true; do
-    read -p "Введите ID контейнера: " CTID
+    safe_read -p "Введите ID контейнера: " CTID
     validate_input "$CTID" "ID контейнера"
     if [[ "$CTID" =~ ^[0-9]+$ ]]; then
         check_container_exists "$CTID"
@@ -41,7 +64,7 @@ echo "Выберите режим работы:"
 echo "1) host-managed (рекомендуемый) - монтирование на хосте + bind mount"
 echo "2) container-direct - прямое монтирование в контейнере"
 while true; do
-    read -p "Режим (1-2): " MODE_CHOICE
+    safe_read -p "Режим (1-2): " MODE_CHOICE
     case "$MODE_CHOICE" in
         1)
             MODE="host-managed"
@@ -60,7 +83,7 @@ done
 # Ввод типа монтирования
 echo ""
 while true; do
-    read -p "Введите тип монтирования (nfs/cifs/local): " SHARE_TYPE
+    safe_read -p "Введите тип монтирования (nfs/cifs/local): " SHARE_TYPE
     validate_input "$SHARE_TYPE" "Тип монтирования"
     case "$SHARE_TYPE" in
         nfs|cifs|local)
@@ -77,7 +100,7 @@ case "$SHARE_TYPE" in
   nfs)
     echo "📌 Пример адреса источника NFS: 192.168.1.10:/media/nfs"
     while true; do
-        read -p "Введите адрес источника NFS: " RAW_SHARE_SRC
+        safe_read -p "Введите адрес источника NFS: " RAW_SHARE_SRC
         validate_input "$RAW_SHARE_SRC" "Адрес источника NFS"
         SHARE_SRC="$RAW_SHARE_SRC"
         break
@@ -86,7 +109,7 @@ case "$SHARE_TYPE" in
   cifs)
     echo "📌 Пример адреса источника CIFS: 192.168.1.10/Movies"
     while true; do
-        read -p "Введите адрес источника CIFS (без //): " RAW_SHARE_SRC
+        safe_read -p "Введите адрес источника CIFS (без //): " RAW_SHARE_SRC
         validate_input "$RAW_SHARE_SRC" "Адрес источника CIFS"
         if [[ "$RAW_SHARE_SRC" != //* ]]; then
             SHARE_SRC="//${RAW_SHARE_SRC}"
@@ -99,7 +122,7 @@ case "$SHARE_TYPE" in
   local)
     echo "📌 Пример локальной директории: /mnt/dsm/data"
     while true; do
-        read -p "Введите путь к локальной директории: " SHARE_SRC
+        safe_read -p "Введите путь к локальной директории: " SHARE_SRC
         validate_input "$SHARE_SRC" "Путь к локальной директории"
         if [[ ! -d "$SHARE_SRC" ]]; then
             echo "❌ Директория $SHARE_SRC не существует"
@@ -113,7 +136,7 @@ esac
 # Ввод пути на хосте (только для host-managed режима или local)
 if [[ "$MODE" == "host-managed" ]]; then
     while true; do
-        read -p "Введите путь монтирования на хосте Proxmox (например, /mnt/share): " HOST_MOUNT
+        safe_read -p "Введите путь монтирования на хосте Proxmox (например, /mnt/share): " HOST_MOUNT
         validate_input "$HOST_MOUNT" "Путь монтирования на хосте"
         break
     done
@@ -121,7 +144,7 @@ fi
 
 # Ввод пути в контейнере
 while true; do
-    read -p "Введите путь в контейнере (например, /mnt/media): " CT_MOUNT
+    safe_read -p "Введите путь в контейнере (например, /mnt/media): " CT_MOUNT
     validate_input "$CT_MOUNT" "Путь в контейнере"
     break
 done
@@ -132,7 +155,7 @@ echo "Выберите уровень доступа:"
 echo "1) Read-Write (rw) - чтение и запись"
 echo "2) Read-Only (ro) - только чтение"
 while true; do
-    read -p "Доступ (1-2): " ACCESS_CHOICE
+    safe_read -p "Доступ (1-2): " ACCESS_CHOICE
     case "$ACCESS_CHOICE" in
         1)
             ACCESS_MODE="rw"
@@ -153,12 +176,12 @@ done
 # Получение учетных данных для CIFS (если необходимо)
 if [[ "$SHARE_TYPE" == "cifs" ]]; then
     while true; do
-        read -p "Введите имя пользователя CIFS: " CIFS_USER
+        safe_read -p "Введите имя пользователя CIFS: " CIFS_USER
         validate_input "$CIFS_USER" "Имя пользователя CIFS"
         break
     done
     while true; do
-        read -s -p "Введите пароль CIFS: " CIFS_PASS
+        safe_read -s -p "Введите пароль CIFS: " CIFS_PASS
         echo
         validate_input "$CIFS_PASS" "Пароль CIFS"
         break

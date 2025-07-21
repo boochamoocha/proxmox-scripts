@@ -246,6 +246,32 @@ if [[ "$MODE" == "host-managed" ]]; then
         # Для mounted - просто используем существующую директорию
         HOST_MOUNT="$SHARE_SRC"
         echo "📂 Использование уже доступной директории: $HOST_MOUNT"
+        
+        # Инициализация анализа контейнера для mounted типа (если не было сделано ранее)
+        if [[ -z "$CONTAINER_TYPE" ]]; then
+            CONTAINER_TYPE=$(get_container_type "$CTID")
+            echo "🔍 Тип контейнера: $CONTAINER_TYPE"
+            
+            # Для типа mounted используем auto режим по умолчанию
+            LXC_COMPAT_MODE=${LXC_COMPAT_MODE:-"auto"}
+            
+            if [[ "$LXC_COMPAT_MODE" == "auto" ]]; then
+                LXC_MAPPING=$(get_lxc_mapping "$CTID")
+                echo "🔍 Обнаружен mapping: UID:GID = $LXC_MAPPING"
+            elif [[ "$LXC_COMPAT_MODE" == "manual" ]]; then
+                LXC_MAPPING="$MANUAL_UID:$MANUAL_GID"
+                echo "🔧 Используется ручной mapping: UID:GID = $LXC_MAPPING"
+            else
+                LXC_MAPPING="0:0"
+                echo "⚠️ Настройка mapping пропущена"
+            fi
+        fi
+        
+        # Настройка прав доступа для существующих директорий (если не skip)
+        if [[ "$LXC_COMPAT_MODE" != "skip" && "$CONTAINER_TYPE" == "unprivileged" ]]; then
+            echo "🔧 Настройка прав доступа для уже доступной директории..."
+            setup_lxc_permissions "$HOST_MOUNT" "$LXC_MAPPING" "$ACCESS_MODE"
+        fi
     fi
 
     # === Найдём свободный mpX ===
@@ -364,12 +390,28 @@ echo "🔍 Проверка монтирования в контейнере..."
 if pct exec "$CTID" -- test -d "$CT_MOUNT"; then
     echo "✅ Директория $CT_MOUNT существует в контейнере"
     
+    # Выполняем тест прав доступа для host-managed режима
+    if [[ "$MODE" == "host-managed" ]]; then
+        if test_write_permissions "$CTID" "$CT_MOUNT" "$ACCESS_MODE"; then
+            WRITE_TEST_STATUS="✅ успешно"
+        else
+            WRITE_TEST_STATUS="❌ ошибка"
+        fi
+    fi
+    
+    echo ""
     echo "📂 Содержимое $CT_MOUNT в контейнере:"
     if pct exec "$CTID" -- ls -la "$CT_MOUNT" 2>/dev/null; then
-        echo "✅ Монтирование успешно завершено!"
+        echo ""
+        if [[ "$WRITE_TEST_STATUS" == "✅ успешно" ]]; then
+            echo "✅ Монтирование успешно завершено!"
+        else
+            echo "⚠️ Монтирование завершено, но есть проблемы с правами доступа"
+        fi
+        
         echo ""
         echo "📋 Сводка конфигурации:"
-        echo "   Контейнер: $CTID"
+        echo "   Контейнер: $CTID ($CONTAINER_TYPE)"
         echo "   Режим: $MODE"
         echo "   Тип: $SHARE_TYPE"
         if [[ "$SHARE_TYPE" != "mounted" ]]; then
@@ -379,8 +421,23 @@ if pct exec "$CTID" -- test -d "$CT_MOUNT"; then
         fi
         echo "   Путь в контейнере: $CT_MOUNT"
         echo "   Доступ: $ACCESS_MODE"
-        if [[ "$MODE" == "host-managed" && "$SHARE_TYPE" != "mounted" ]]; then
-            echo "   Путь на хосте: $HOST_MOUNT"
+        if [[ "$MODE" == "host-managed" ]]; then
+            echo "   LXC mapping: $LXC_MAPPING (режим: $LXC_COMPAT_MODE)"
+            if [[ "$SHARE_TYPE" != "mounted" ]]; then
+                echo "   Путь на хосте: $HOST_MOUNT"
+            fi
+            if [[ -n "$WRITE_TEST_STATUS" ]]; then
+                echo "   Тест записи: $WRITE_TEST_STATUS"
+            fi
+        fi
+        
+        # Дополнительные рекомендации при проблемах
+        if [[ "$WRITE_TEST_STATUS" == "❌ ошибка" ]]; then
+            echo ""
+            echo "💡 Рекомендации для исправления проблем с правами:"
+            echo "   1. Проверьте права на сетевой шаре"
+            echo "   2. Убедитесь, что сервер поддерживает нужные UID/GID"
+            echo "   3. При необходимости запустите скрипт с режимом 'manual' и укажите корректные UID/GID"
         fi
     else
         echo "⚠️ Директория пуста или недоступна"

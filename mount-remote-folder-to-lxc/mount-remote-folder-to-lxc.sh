@@ -80,17 +80,22 @@ while true; do
     esac
 done
 
-# Ввод типа монтирования
+# Ввод типа источника данных
+echo ""
+echo "💡 Выберите тип источника данных:"
+echo "   • nfs - сетевая NFS шара (будет смонтирована на хосте)"
+echo "   • cifs - сетевая CIFS/SMB шара (будет смонтирована на хосте + учетные данные)"  
+echo "   • mounted - уже доступная директория на хосте (прямой bind mount)"
 echo ""
 while true; do
-    safe_read -p "Введите тип монтирования (nfs/cifs/local): " SHARE_TYPE
-    validate_input "$SHARE_TYPE" "Тип монтирования"
+    safe_read -p "Введите тип источника (nfs/cifs/mounted): " SHARE_TYPE
+    validate_input "$SHARE_TYPE" "Тип источника данных"
     case "$SHARE_TYPE" in
-        nfs|cifs|local)
+        nfs|cifs|mounted)
             break
             ;;
         *)
-            echo "❌ Поддерживаемые типы: nfs, cifs, local"
+            echo "❌ Поддерживаемые типы: nfs, cifs, mounted"
             ;;
     esac
 done
@@ -119,11 +124,11 @@ case "$SHARE_TYPE" in
         break
     done
     ;;
-  local)
-    echo "📌 Пример локальной директории: /mnt/dsm/data"
+  mounted)
+    echo "📌 Пример уже доступной директории: /mnt/dsm/data"
     while true; do
-        safe_read -p "Введите путь к локальной директории: " SHARE_SRC
-        validate_input "$SHARE_SRC" "Путь к локальной директории"
+        safe_read -p "Введите путь к директории на хосте: " SHARE_SRC
+        validate_input "$SHARE_SRC" "Путь к директории на хосте"
         if [[ ! -d "$SHARE_SRC" ]]; then
             echo "❌ Директория $SHARE_SRC не существует"
         else
@@ -134,7 +139,7 @@ case "$SHARE_TYPE" in
 esac
 
 # Ввод пути на хосте (только для NFS/CIFS в host-managed режиме)
-if [[ "$MODE" == "host-managed" && "$SHARE_TYPE" != "local" ]]; then
+if [[ "$MODE" == "host-managed" && "$SHARE_TYPE" != "mounted" ]]; then
     while true; do
         safe_read -p "Введите путь монтирования на хосте Proxmox (например, /mnt/share): " HOST_MOUNT
         validate_input "$HOST_MOUNT" "Путь монтирования на хосте"
@@ -196,13 +201,13 @@ if [[ "$MODE" == "host-managed" ]]; then
     echo "📋 Режим: Host-managed"
     
     # Создание папки на хосте (только для сетевых шар)
-    if [[ "$SHARE_TYPE" != "local" ]]; then
+    if [[ "$SHARE_TYPE" != "mounted" ]]; then
         echo "📁 Создание директории на хосте: $HOST_MOUNT"
         mkdir -p "$HOST_MOUNT"
     fi
 
     # Монтирование на хосте (для network shares)
-    if [[ "$SHARE_TYPE" != "local" ]]; then
+    if [[ "$SHARE_TYPE" != "mounted" ]]; then
         # Установка зависимостей
         echo "📦 Установка зависимостей..."
         if [[ "$SHARE_TYPE" == "nfs" ]]; then
@@ -224,9 +229,9 @@ if [[ "$MODE" == "host-managed" ]]; then
             exit 1
         fi
     else
-        # Для local - просто используем существующую директорию
+        # Для mounted - просто используем существующую директорию
         HOST_MOUNT="$SHARE_SRC"
-        echo "📂 Использование локальной директории: $HOST_MOUNT"
+        echo "📂 Использование уже доступной директории: $HOST_MOUNT"
     fi
 
     # === Найдём свободный mpX ===
@@ -258,9 +263,9 @@ if [[ "$MODE" == "host-managed" ]]; then
 elif [[ "$MODE" == "container-direct" ]]; then
     echo "📋 Режим: Container-direct"
     
-    if [[ "$SHARE_TYPE" == "local" ]]; then
-        echo "❌ Container-direct режим не поддерживается для локальных директорий"
-        echo "Локальные директории могут быть доступны только через host-managed режим"
+    if [[ "$SHARE_TYPE" == "mounted" ]]; then
+        echo "❌ Container-direct режим не поддерживается для уже смонтированных директорий"
+        echo "Существующие директории хоста могут быть доступны только через host-managed режим"
         exit 1
     fi
 
@@ -353,14 +358,14 @@ if pct exec "$CTID" -- test -d "$CT_MOUNT"; then
         echo "   Контейнер: $CTID"
         echo "   Режим: $MODE"
         echo "   Тип: $SHARE_TYPE"
-        if [[ "$SHARE_TYPE" != "local" ]]; then
+        if [[ "$SHARE_TYPE" != "mounted" ]]; then
             echo "   Источник: $SHARE_SRC"
         else
-            echo "   Локальная директория: $SHARE_SRC"
+            echo "   Директория хоста: $SHARE_SRC"
         fi
         echo "   Путь в контейнере: $CT_MOUNT"
         echo "   Доступ: $ACCESS_MODE"
-        if [[ "$MODE" == "host-managed" && "$SHARE_TYPE" != "local" ]]; then
+        if [[ "$MODE" == "host-managed" && "$SHARE_TYPE" != "mounted" ]]; then
             echo "   Путь на хосте: $HOST_MOUNT"
         fi
     else

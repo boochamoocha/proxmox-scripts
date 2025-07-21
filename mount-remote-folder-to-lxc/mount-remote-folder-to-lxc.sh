@@ -50,7 +50,96 @@ check_container_exists() {
     fi
 }
 
+# Функция определения типа контейнера (privileged/unprivileged)
+get_container_type() {
+    local ctid="$1"
+    local conf_path="/etc/pve/lxc/$ctid.conf"
+    
+    if [[ ! -f "$conf_path" ]]; then
+        echo "❌ Не найден конфигурационный файл: $conf_path"
+        exit 1
+    fi
+    
+    # Проверка наличия unprivileged: 1 в конфиге
+    if grep -q "^unprivileged:[[:space:]]*1" "$conf_path"; then
+        echo "unprivileged"
+    else
+        echo "privileged"
+    fi
+}
+
+# Функция получения UID/GID mapping для unprivileged контейнеров
+get_lxc_mapping() {
+    local ctid="$1"
+    local conf_path="/etc/pve/lxc/$ctid.conf"
+    
+    # Ищем первую запись lxc.idmap для uid
+    local uid_line=$(grep "^lxc\.idmap:[[:space:]]*u[[:space:]]*0[[:space:]]*" "$conf_path" | head -n1)
+    local gid_line=$(grep "^lxc\.idmap:[[:space:]]*g[[:space:]]*0[[:space:]]*" "$conf_path" | head -n1)
+    
+    if [[ -n "$uid_line" && -n "$gid_line" ]]; then
+        # Извлекаем UID и GID из строк вида "lxc.idmap: u 0 100000 65536"
+        local uid=$(echo "$uid_line" | awk '{print $4}')
+        local gid=$(echo "$gid_line" | awk '{print $4}')
+        echo "$uid:$gid"
+    else
+        echo "0:0"
+    fi
+}
+
+# Функция настройки прав доступа для LXC user namespace
+setup_lxc_permissions() {
+    local mount_path="$1"
+    local lxc_mapping="$2"
+    local access_mode="$3"
+    
+    local uid=$(echo "$lxc_mapping" | cut -d: -f1)
+    local gid=$(echo "$lxc_mapping" | cut -d: -f2)
+    
+    echo "🔧 Настройка владельца директории: $uid:$gid"
+    chown -R "$uid:$gid" "$mount_path" || {
+        echo "⚠️ Не удалось изменить владельца. Возможно, это нормально для некоторых типов файловых систем."
+    }
+    
+    if [[ "$access_mode" == "rw" ]]; then
+        echo "🔧 Настройка прав для записи..."
+        chmod -R u+w "$mount_path" 2>/dev/null || {
+            echo "⚠️ Не удалось изменить права доступа. Возможно, это нормально для некоторых типов файловых систем."
+        }
+    fi
+}
+
+# Функция тестирования прав записи
+test_write_permissions() {
+    local ctid="$1"
+    local mount_path="$2" 
+    local access_mode="$3"
+    
+    echo "🧪 Тестирование прав доступа..."
+    
+    if [[ "$access_mode" == "ro" ]]; then
+        echo "📖 Режим Read-Only - тест записи пропущен"
+        return 0
+    fi
+    
+    # Тест записи от имени root в контейнере
+    local test_file="$mount_path/.write_test_$(date +%s)"
+    
+    if pct exec "$ctid" -- bash -c "echo 'test' > '$test_file' && rm -f '$test_file'" 2>/dev/null; then
+        echo "✅ Тест записи успешен"
+        return 0
+    else
+        echo "❌ Тест записи неудачен - проблемы с правами доступа"
+        return 1
+    fi
+}
+
 echo "=== 🧩 Конфигурация монтирования в Proxmox LXC ==="
+
+# Инициализация переменных
+CONTAINER_TYPE=""
+LXC_MAPPING=""
+LXC_COMPAT_MODE="auto"
 
 # Ввод ID контейнера с валидацией
 while true; do
@@ -220,6 +309,21 @@ if [[ "$MODE" == "host-managed" ]]; then
         mkdir -p "$HOST_MOUNT"
     fi
 
+    # Анализ контейнера для правильного монтирования
+    CONTAINER_TYPE=$(get_container_type "$CTID")
+    echo "🔍 Тип контейнера: $CONTAINER_TYPE"
+    
+    if [[ "$LXC_COMPAT_MODE" == "auto" ]]; then
+        LXC_MAPPING=$(get_lxc_mapping "$CTID")
+        echo "🔍 Обнаружен mapping: UID:GID = $LXC_MAPPING"
+    elif [[ "$LXC_COMPAT_MODE" == "manual" ]]; then
+        LXC_MAPPING="$MANUAL_UID:$MANUAL_GID"
+        echo "🔧 Используется ручной mapping: UID:GID = $LXC_MAPPING"
+    else
+        LXC_MAPPING="0:0"
+        echo "⚠️ Настройка mapping пропущена"
+    fi
+
     # Монтирование на хосте (для network shares)
     if [[ "$SHARE_TYPE" != "mounted" ]]; then
         # Установка зависимостей
@@ -227,11 +331,32 @@ if [[ "$MODE" == "host-managed" ]]; then
         if [[ "$SHARE_TYPE" == "nfs" ]]; then
             apt-get update -qq && apt-get install -y nfs-common
             echo "🔗 Монтирование NFS на хосте..."
-            mount -t nfs "$SHARE_SRC" "$HOST_MOUNT"
+            
+            # Подготовка опций монтирования с учетом LXC mapping
+            local mount_opts="vers=3,rw"
+            if [[ "$CONTAINER_TYPE" == "unprivileged" && "$LXC_COMPAT_MODE" != "skip" ]]; then
+                local uid=$(echo "$LXC_MAPPING" | cut -d: -f1)
+                local gid=$(echo "$LXC_MAPPING" | cut -d: -f2)
+                mount_opts="$mount_opts,all_squash,anonuid=$uid,anongid=$gid"
+                echo "🔧 Использование LXC mapping для NFS: anonuid=$uid,anongid=$gid"
+            fi
+            
+            mount -t nfs "$SHARE_SRC" "$HOST_MOUNT" -o "$mount_opts"
+            
         elif [[ "$SHARE_TYPE" == "cifs" ]]; then
             apt-get update -qq && apt-get install -y cifs-utils
             echo "🔗 Монтирование CIFS на хосте..."
-            mount -t cifs "$SHARE_SRC" "$HOST_MOUNT" -o username="$CIFS_USER",password="$CIFS_PASS",vers=3.0
+            
+            # Подготовка опций монтирования с учетом LXC mapping
+            local mount_opts="username=$CIFS_USER,password=$CIFS_PASS,vers=3.0"
+            if [[ "$CONTAINER_TYPE" == "unprivileged" && "$LXC_COMPAT_MODE" != "skip" ]]; then
+                local uid=$(echo "$LXC_MAPPING" | cut -d: -f1)
+                local gid=$(echo "$LXC_MAPPING" | cut -d: -f2)
+                mount_opts="$mount_opts,uid=$uid,gid=$gid,file_mode=0664,dir_mode=0775"
+                echo "🔧 Использование LXC mapping для CIFS: uid=$uid,gid=$gid"
+            fi
+            
+            mount -t cifs "$SHARE_SRC" "$HOST_MOUNT" -o "$mount_opts"
         fi
 
         # Проверка монтирования
@@ -242,30 +367,16 @@ if [[ "$MODE" == "host-managed" ]]; then
             dmesg | tail -n 10
             exit 1
         fi
+        
+        # Настройка прав доступа после монтирования (для unprivileged контейнеров)
+        if [[ "$CONTAINER_TYPE" == "unprivileged" && "$LXC_COMPAT_MODE" != "skip" ]]; then
+            echo "🔧 Настройка прав доступа для непривилегированного контейнера..."
+            setup_lxc_permissions "$HOST_MOUNT" "$LXC_MAPPING" "$ACCESS_MODE"
+        fi
     else
         # Для mounted - просто используем существующую директорию
         HOST_MOUNT="$SHARE_SRC"
         echo "📂 Использование уже доступной директории: $HOST_MOUNT"
-        
-        # Инициализация анализа контейнера для mounted типа (если не было сделано ранее)
-        if [[ -z "$CONTAINER_TYPE" ]]; then
-            CONTAINER_TYPE=$(get_container_type "$CTID")
-            echo "🔍 Тип контейнера: $CONTAINER_TYPE"
-            
-            # Для типа mounted используем auto режим по умолчанию
-            LXC_COMPAT_MODE=${LXC_COMPAT_MODE:-"auto"}
-            
-            if [[ "$LXC_COMPAT_MODE" == "auto" ]]; then
-                LXC_MAPPING=$(get_lxc_mapping "$CTID")
-                echo "🔍 Обнаружен mapping: UID:GID = $LXC_MAPPING"
-            elif [[ "$LXC_COMPAT_MODE" == "manual" ]]; then
-                LXC_MAPPING="$MANUAL_UID:$MANUAL_GID"
-                echo "🔧 Используется ручной mapping: UID:GID = $LXC_MAPPING"
-            else
-                LXC_MAPPING="0:0"
-                echo "⚠️ Настройка mapping пропущена"
-            fi
-        fi
         
         # Настройка прав доступа для существующих директорий (если не skip)
         if [[ "$LXC_COMPAT_MODE" != "skip" && "$CONTAINER_TYPE" == "unprivileged" ]]; then

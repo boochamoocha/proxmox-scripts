@@ -73,17 +73,28 @@ get_lxc_mapping() {
     local ctid="$1"
     local conf_path="/etc/pve/lxc/$ctid.conf"
     
-    # Ищем первую запись lxc.idmap для uid
-    local uid_line=$(grep "^lxc\.idmap:[[:space:]]*u[[:space:]]*0[[:space:]]*" "$conf_path" | head -n1)
-    local gid_line=$(grep "^lxc\.idmap:[[:space:]]*g[[:space:]]*0[[:space:]]*" "$conf_path" | head -n1)
+    # Ищем первую запись lxc.idmap для uid (поддерживаем оба формата: с : и без)
+    local uid_line=$(grep -E "^lxc\.idmap[[:space:]]*[:=][[:space:]]*u[[:space:]]+0[[:space:]]+" "$conf_path" | head -n1)
+    local gid_line=$(grep -E "^lxc\.idmap[[:space:]]*[:=][[:space:]]*g[[:space:]]+0[[:space:]]+" "$conf_path" | head -n1)
     
     if [[ -n "$uid_line" && -n "$gid_line" ]]; then
-        # Извлекаем UID и GID из строк вида "lxc.idmap: u 0 100000 65536"
+        # Извлекаем UID и GID из строк вида "lxc.idmap = u 0 100000 65536" или "lxc.idmap: u 0 100000 65536"
         local uid=$(echo "$uid_line" | awk '{print $4}')
         local gid=$(echo "$gid_line" | awk '{print $4}')
         echo "$uid:$gid"
     else
-        echo "0:0"
+        # Если не найдены специфичные mapping для UID 0, проверим любые uid mapping
+        uid_line=$(grep -E "^lxc\.idmap[[:space:]]*[:=][[:space:]]*u[[:space:]]+" "$conf_path" | head -n1)
+        gid_line=$(grep -E "^lxc\.idmap[[:space:]]*[:=][[:space:]]*g[[:space:]]+" "$conf_path" | head -n1)
+        
+        if [[ -n "$uid_line" && -n "$gid_line" ]]; then
+            # Для любых mapping берем host_uid (третье поле)
+            local uid=$(echo "$uid_line" | awk '{print $4}')
+            local gid=$(echo "$gid_line" | awk '{print $4}')
+            echo "$uid:$gid"
+        else
+            echo "0:0"
+        fi
     fi
 }
 
@@ -316,6 +327,13 @@ if [[ "$MODE" == "host-managed" ]]; then
     if [[ "$LXC_COMPAT_MODE" == "auto" ]]; then
         LXC_MAPPING=$(get_lxc_mapping "$CTID")
         echo "🔍 Обнаружен mapping: UID:GID = $LXC_MAPPING"
+        
+        # Отладочная информация для диагностики
+        if [[ "$CONTAINER_TYPE" == "unprivileged" && "$LXC_MAPPING" == "0:0" ]]; then
+            echo "⚠️ Отладка: непривилегированный контейнер, но mapping = 0:0"
+            echo "🔍 Содержимое конфига /etc/pve/lxc/$CTID.conf (строки idmap):"
+            grep -E "idmap" "/etc/pve/lxc/$CTID.conf" || echo "❌ Строки idmap не найдены"
+        fi
     elif [[ "$LXC_COMPAT_MODE" == "manual" ]]; then
         LXC_MAPPING="$MANUAL_UID:$MANUAL_GID"
         echo "🔧 Используется ручной mapping: UID:GID = $LXC_MAPPING"

@@ -2,7 +2,7 @@
 
 # Скрипт для автоматической установки Avahi в LXC-контейнер на Proxmox
 # Автор: Claude
-# Использование: ./install_avahi_lxc.sh <CONTAINER_ID>
+# Использование: ./install_avahi_lxc.sh [CONTAINER_ID]
 
 set -euo pipefail
 
@@ -14,10 +14,10 @@ SYSTEMD_OVERRIDE_CREATED=false
 SERVICE_ENABLED=false
 
 show_usage() {
-    echo "Использование: $0 <CONTAINER_ID>"
+    echo "Использование: $0 [CONTAINER_ID]"
     echo "Пример: $0 101"
     echo ""
-    echo "CONTAINER_ID - обязательный параметр, ID LXC-контейнера"
+    echo "Если CONTAINER_ID не указан, скрипт запросит его интерактивно"
 }
 
 log_info() {
@@ -74,26 +74,58 @@ cleanup_on_error() {
 
 trap cleanup_on_error ERR
 
+show_containers() {
+    echo ""
+    echo "Доступные контейнеры:"
+    echo "ID    STATUS    NAME"
+    echo "---   -------   ----"
+    pct list | tail -n +2 | while read -r line; do
+        echo "$line"
+    done
+    echo ""
+}
+
+prompt_container_id() {
+    local input_id
+    
+    show_containers
+    
+    while true; do
+        read -p "Введите ID контейнера: " input_id
+        
+        if [[ -z "$input_id" ]]; then
+            echo "ID контейнера не может быть пустым. Попробуйте снова."
+            continue
+        fi
+        
+        if ! [[ "$input_id" =~ ^[0-9]+$ ]]; then
+            echo "ID контейнера должен быть числом. Попробуйте снова."
+            continue
+        fi
+        
+        CONTAINER_ID="$input_id"
+        break
+    done
+}
+
 parse_arguments() {
-    if [[ $# -eq 0 ]]; then
-        log_error "Не указан ID контейнера"
+    if [[ $# -gt 1 ]]; then
+        log_error "Слишком много аргументов"
         show_usage
         exit 1
     fi
     
-    if [[ $# -ne 1 ]]; then
-        log_error "Неверное количество аргументов"
-        show_usage
-        exit 1
+    if [[ $# -eq 1 ]]; then
+        if ! [[ "$1" =~ ^[0-9]+$ ]]; then
+            log_error "ID контейнера должен быть числом"
+            show_usage
+            exit 1
+        fi
+        CONTAINER_ID="$1"
+    else
+        # Интерактивный режим
+        prompt_container_id
     fi
-    
-    if ! [[ "$1" =~ ^[0-9]+$ ]]; then
-        log_error "ID контейнера должен быть числом"
-        show_usage
-        exit 1
-    fi
-    
-    CONTAINER_ID="$1"
 }
 
 check_container() {

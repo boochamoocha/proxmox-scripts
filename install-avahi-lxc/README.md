@@ -33,18 +33,27 @@ Bash-скрипт для автоматической установки и на
 
 ## Установка
 
-### 1. Скачивание скрипта
+### 1. Запуск непосредственно из GitHub (рекомендуется)
 
 ```bash
 # На хосте Proxmox
-wget https://raw.githubusercontent.com/your-repo/install-avahi-lxc/main/install_avahi_lxc.sh
-# или
-curl -O https://raw.githubusercontent.com/your-repo/install-avahi-lxc/main/install_avahi_lxc.sh
+bash <(curl -s https://raw.githubusercontent.com/boochamoocha/proxmox-scripts/main/install-avahi-lxc/install_avahi_lxc.sh) <CONTAINER_ID>
 ```
 
-### 2. Установка прав на выполнение
+**Пример:**
+```bash
+bash <(curl -s https://raw.githubusercontent.com/boochamoocha/proxmox-scripts/main/install-avahi-lxc/install_avahi_lxc.sh) 101
+```
+
+### 2. Альтернативный способ: скачивание и запуск
 
 ```bash
+# На хосте Proxmox
+wget https://raw.githubusercontent.com/boochamoocha/proxmox-scripts/main/install-avahi-lxc/install_avahi_lxc.sh
+# или
+curl -O https://raw.githubusercontent.com/boochamoocha/proxmox-scripts/main/install-avahi-lxc/install_avahi_lxc.sh
+
+# Установка прав на выполнение
 chmod +x install_avahi_lxc.sh
 ```
 
